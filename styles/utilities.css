@@ -1,0 +1,6 @@
+@layer utilities {
+  .u-blur-header { @apply backdrop-blur bg-white/70 border-b; }
+  .u-container    { @apply max-w-7xl mx-auto px-4; }
+  .u-section      { @apply u-container py-6; }
+  .u-grid-3       { @apply grid grid-cols-1 lg:grid-cols-3 gap-4; }
+}

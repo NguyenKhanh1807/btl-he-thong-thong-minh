@@ -1,0 +1,17 @@
+@layer components {
+  /* Card khung mặc định */
+  .c-card { @apply bg-white border border-slate-200 rounded-2xl shadow-card; }
+  .c-card-header { @apply p-4 pb-2 flex items-center justify-between; }
+  .c-card-content { @apply p-4 pt-0; }
+
+  /* Button biến thể */
+  .btn    { @apply inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition border; }
+  .btn-pri{ @apply btn bg-brand-600 hover:bg-brand-700 border-brand-700 text-white; }
+  .btn-sec{ @apply btn bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-900; }
+
+  /* Badge màu theo sentiment */
+  .badge      { @apply px-2 py-1 text-xs rounded-full; }
+  .badge-pos  { @apply badge bg-green-100 text-green-700; }
+  .badge-neu  { @apply badge bg-yellow-100 text-yellow-700; }
+  .badge-neg  { @apply badge bg-red-100 text-red-700; }
+}
