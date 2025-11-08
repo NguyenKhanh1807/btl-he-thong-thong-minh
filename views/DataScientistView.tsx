@@ -1,81 +1,816 @@
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { useEffect, useMemo, useState } from "react";
+import React from "react";
+import Papa from "papaparse";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
 import { Button } from "../components/ui/button";
-import { UploadCloud, RefreshCw } from "lucide-react";
-import { StatCard } from "../components/StatCard";
-import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Tooltip as RTooltip, Legend, Bar } from "recharts";
-import { confusion } from "../data/mock";
+import { Input } from "../components/ui/input";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../components/ui/tabs";
+import { Label } from "../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
+import { ReloadIcon } from "../components/ui/reload-icon";
+import { RefreshCw, UploadCloud, Play, Database, SlidersHorizontal } from "lucide-react";
+
+// Existing DS components in your project
+import MisclassifiedList from "../components/DataScientistView/MisclassifiedList";
+import TopFeatures from "../components/DataScientistView/TopFeatures";
+import ConfusionMatrixCard from "../components/DataScientistView/ConfusionMatrixCard";
+import BatchPredictSummary from "../components/DataScientistView/BatchPredictSummary";
+
+/* ---------------- Types ---------------- */
+
+type Metrics = {
+  accuracy?: number;
+  precision?: number;
+  recall?: number;
+  f1?: number;
+  roc_auc?: number;
+  params?: Record<string, any>;
+};
+
+// predictions.csv (y_true,y_pred) & predictions_new.csv (text,pred)
+type PredRow = { text: string; y_true?: number | null; y_pred?: number | null };
+
+type Sample = { text: string; y_true: number; y_pred: number };
+
+// Generic dataset row (free-form CSV columns)
+type AnyRow = Record<string, any>;
+
+/* ---------------- Paths/Endpoints ---------------- */
+
+const BASE = "/svm/outputs";
+const PATH = {
+  METRICS: `${BASE}/metrics.json`,
+  CM_PNG: `${BASE}/confusion_matrix.png`,
+  ROC_PNG: `${BASE}/roc_curve.png`,
+  CM_CSV: `${BASE}/confusion_matrix.csv`,
+  TOP_TXT: `${BASE}/top_features.txt`,
+  PRED_CSV: `${BASE}/predictions.csv`,
+  PRED_NEW_CSV: `${BASE}/predictions_new.csv`,
+};
+
+// API endpoints (adjust to your backend)
+const API = {
+  TRAIN: "/svm/train", // POST {params, datasetRef}
+  RUNS: "/svm/runs.json", // GET list of past runs
+  DATASETS_LIST: "/svm/datasets/list.json", // GET available server-side datasets
+  UPLOAD: "/svm/datasets/upload", // POST form-data {file}
+};
+
+/* ---------------- Helper: numeric correlation ---------------- */
+
+function computeCorrelationMatrix(rows: AnyRow[], maxCols = 20) {
+  if (!rows || rows.length === 0) return { cols: [] as string[], corr: [] as number[][] };
+  // Pick numeric columns
+  const keys = Object.keys(rows[0]);
+  const numericCols = keys.filter((k) => rows.every((r) => r[k] === null || r[k] === undefined || typeof r[k] === "number" || (!isNaN(Number(r[k])) && String(r[k]).trim() !== "")));
+  const cols = numericCols.slice(0, maxCols);
+  const data = rows.map((r) => cols.map((c) => (typeof r[c] === "number" ? r[c] : Number(r[c]))));
+  const n = data.length;
+  if (n === 0 || cols.length === 0) return { cols: [] as string[], corr: [] as number[][] };
+  const mean: number[] = cols.map((_, j) => data.reduce((s, row) => s + (isFinite(row[j]) ? row[j] : 0), 0) / n);
+  const std: number[] = cols.map((_, j) => Math.sqrt(
+    data.reduce((s, row) => {
+      const v = row[j];
+      return s + (isFinite(v) ? (v - mean[j]) ** 2 : 0);
+    }, 0) / Math.max(1, n - 1)
+  ));
+  const corr: number[][] = cols.map(() => cols.map(() => 0));
+  for (let i = 0; i < cols.length; i++) {
+    for (let j = i; j < cols.length; j++) {
+      let s = 0;
+      for (let k = 0; k < n; k++) {
+        const vi = data[k][i];
+        const vj = data[k][j];
+        if (isFinite(vi) && isFinite(vj)) {
+          s += ((vi - mean[i]) * (vj - mean[j]));
+        }
+      }
+      const denom = Math.max(1e-9, (n - 1) * std[i] * std[j]);
+      const c = denom === 0 ? 0 : s / denom;
+      corr[i][j] = c;
+      corr[j][i] = c;
+    }
+  }
+  return { cols, corr };
+}
+
+/* ---------------- Main ---------------- */
 
 export default function DataScientistView() {
-  const metrics = { accuracy: 0.89, precision: 0.87, recall: 0.86, f1: 0.86 };
+  /* ---- Metrics & artifacts ---- */
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [rocPngOk, setRocPngOk] = useState<boolean>(false);
+
+  const [predRows, setPredRows] = useState<PredRow[]>([]);
+
+  /* ---- Dataset preview ---- */
+  const [datasetUrl, setDatasetUrl] = useState<string>("D:\Study\Master\HK1_2025\Hệ thống thông minh\BTL\data\raw\dataset.csv");
+  const [datasetRows, setDatasetRows] = useState<AnyRow[]>([]);
+  const [headN, setHeadN] = useState<number>(10);
+
+  /* ---- Heatmap ---- */
+  const [heatCols, setHeatCols] = useState<string[]>([]);
+  const [heatCorr, setHeatCorr] = useState<number[][]>([]);
+  // Heatmap for train section (reuse numeric corr)
+  const [showHeatmapTrain, setShowHeatmapTrain] = useState(true);
+
+  const recomputeHeatmapFromCurrent = () => {
+    // lấy tối đa 1000 dòng hiện có để tính
+    const sample = datasetRows.slice(0, 1000);
+    const { cols, corr } = computeCorrelationMatrix(sample);
+    setHeatCols(cols);
+    setHeatCorr(corr);
+  };
+
+
+  /* ---- Retrain params ---- */
+  const [isTraining, setIsTraining] = useState(false);
+  const [kernel, setKernel] = useState<string>("linear");
+  const [C, setC] = useState<number>(1.0);
+  const [gammaMode, setGammaMode] = useState<string>("scale"); // "scale" | "auto" | "value"
+  const [gammaValue, setGammaValue] = useState<number>(0.1);
+  const [degree, setDegree] = useState<number>(3);
+  const [testSize, setTestSize] = useState<number>(0.2);
+  const [ngramMin, setNgramMin] = useState<number>(1);
+  const [ngramMax, setNgramMax] = useState<number>(2);
+  const [maxFeatures, setMaxFeatures] = useState<number>(50000);
+
+  /* ---- History ---- */
+  type Run = { id: string; created_at: string; accuracy?: number; f1?: number; params?: Record<string, any> };
+  const [runs, setRuns] = useState<Run[]>([]);
+
+  /* ---- Datasets on server ---- */
+  const [serverDatasets, setServerDatasets] = useState<string[]>([]);
+
+  // Load metrics
+  useEffect(() => {
+    fetch(PATH.METRICS)
+      .then((r) => (r.ok ? r.json() : Promise.reject("metrics not found")))
+      .then((j: Metrics) => setMetrics(j))
+      .catch(() => setMetrics(null));
+  }, []);
+
+  // Check ROC
+  useEffect(() => {
+    fetch(PATH.ROC_PNG, { method: "HEAD" })
+      .then((r) => setRocPngOk(r.ok))
+      .catch(() => setRocPngOk(false));
+  }, []);
+
+  // Predictions for misclassified (uses your existing pipeline)
+  useEffect(() => {
+    Papa.parse(PATH.PRED_CSV, {
+      download: true,
+      header: true,
+      dynamicTyping: true,
+      complete: (res) => {
+        const rows = (res.data as any[]).filter((r) => r?.text !== undefined);
+        setPredRows(rows as PredRow[]);
+      },
+    });
+  }, []);
+
+  // Load dataset preview (head N)
+  const [datasetErr, setDatasetErr] = useState<string | null>(null);
+
+  const loadDataset = async (url: string) => {
+    try {
+      setDatasetErr(null);
+      // lấy response trước để kiểm tra
+      const resp = await fetch(url, { method: "GET" });
+      const ct = resp.headers.get("content-type") || "";
+      const text = await resp.text();
+
+      // phát hiện HTML (fallback SPA) hoặc content-type không phải CSV/text
+      const looksHtml = /^\s*<!doctype html|^\s*<html/i.test(text);
+      const isCsvLike = /text\/csv|application\/csv|text\/plain/i.test(ct) || url.endsWith(".csv");
+
+      if (looksHtml || (!isCsvLike && text.split("\n").length < 2)) {
+        setDatasetRows([]);
+        setHeatCols([]);
+        setHeatCorr([]);
+        setDatasetErr(
+          "Không tải được CSV. URL đang trả về HTML (có thể do proxy hoặc đường dẫn sai). Hãy kiểm tra lại static mount / proxy và Content-Type."
+        );
+        return;
+      }
+
+      // parse từ chuỗi text để tránh Papa tải lại lần nữa
+      Papa.parse<AnyRow>(text, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        complete: (res) => {
+          const rows = (res.data as AnyRow[]).filter((r) => r && Object.keys(r).length > 0);
+          setDatasetRows(rows);
+          const sample = rows.slice(0, 1000);
+          const { cols, corr } = computeCorrelationMatrix(sample);
+          setHeatCols(cols);
+          setHeatCorr(corr);
+        },
+        error: (err: { message?: string }) => {
+          setDatasetErr("Lỗi parse CSV: " + (err?.message ?? "unknown"));
+        },
+      });
+    } catch (e: any) {
+      setDatasetErr("Không tải được CSV: " + (e?.message || String(e)));
+    }
+  };
+
+  const handleUpload = async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+
+    try {
+      const res = await fetch(API.UPLOAD, { method: "POST", body: fd });
+      if (res.ok) {
+        const j = await res.json();
+        if (j?.path) setDatasetUrl(j.path);
+      }
+    } catch { /* ignore */ }
+
+    // Preview ngay từ file local
+    Papa.parse(file, {
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true,
+      complete: (r) => {
+        const rows = (r.data as AnyRow[]).filter((x) => x && Object.keys(x).length > 0);
+        setDatasetRows(rows);
+        const sample = rows.slice(0, 1000);
+        const { cols, corr } = computeCorrelationMatrix(sample);
+        setHeatCols(cols);
+        setHeatCorr(corr);
+      },
+      error: (err: any) => {
+        setDatasetErr("Lỗi parse CSV: " + (err?.message ?? String(err)));
+      },
+    });
+  };
+
+  useEffect(() => {
+    if (datasetUrl) loadDataset(datasetUrl);
+  }, [datasetUrl]);
+
+  // Load runs history
+  const fetchRuns = () => {
+    fetch(API.RUNS)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((arr: Run[]) => setRuns((arr || []).sort((a, b) => (a.created_at > b.created_at ? -1 : 1))))
+      .catch(() => setRuns([]));
+  };
+  useEffect(() => { fetchRuns(); }, []);
+
+  // Load available datasets on server (optional)
+  useEffect(() => {
+    fetch(API.DATASETS_LIST)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((arr: string[]) => setServerDatasets(arr || []))
+      .catch(() => setServerDatasets([]));
+  }, []);
+
+  const cards = useMemo(() => {
+    const m = metrics ?? {};
+    const pct = (v?: number) => (typeof v === "number" ? `${(v * 100).toFixed(1)}%` : "—");
+    return [
+      { k: "Accuracy", v: pct(m.accuracy) },
+      { k: "Precision", v: pct(m.precision) },
+      { k: "Recall", v: pct(m.recall) },
+      { k: "F1-score", v: pct(m.f1) },
+      { k: "ROC-AUC", v: typeof m.roc_auc === "number" ? m.roc_auc.toFixed(3) : "—" },
+    ];
+  }, [metrics]);
+
+  const misclassified: Sample[] = useMemo(() => {
+    return predRows
+      .filter((r) =>
+        r.text !== undefined &&
+        Number.isFinite(Number(r.y_true)) &&
+        Number.isFinite(Number(r.y_pred)) &&
+        Number(r.y_true) !== Number(r.y_pred)
+      )
+      .map((r) => ({ text: String(r.text ?? ""), y_true: Number(r.y_true), y_pred: Number(r.y_pred) }))
+      .slice(0, 10);
+  }, [predRows]);
+
+  const onUploadFile = async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(API.UPLOAD, { method: "POST", body: fd });
+    if (res.ok) {
+      const j = await res.json();
+      if (j?.path) setDatasetUrl(j.path);
+      // immediate preview from local file too
+      Papa.parse(file, {
+        header: true,
+        dynamicTyping: true,
+        complete: (r) => {
+          const rows = (r.data as AnyRow[]).filter((x) => x && Object.keys(x).length > 0);
+          setDatasetRows(rows);
+          const sample = rows.slice(0, 1000);
+          const { cols, corr } = computeCorrelationMatrix(sample);
+          setHeatCols(cols);
+          setHeatCorr(corr);
+        },
+      });
+    }
+  };
+
+  const visibleRows = useMemo(() => datasetRows.slice(0, headN), [datasetRows, headN]);
+  const tableCols = useMemo(() => (visibleRows[0] ? Object.keys(visibleRows[0]) : []), [visibleRows]);
+
+  const triggerTrain = async () => {
+    setIsTraining(true);
+    try {
+      const gamma = gammaMode === "value" ? gammaValue : gammaMode; // string or number
+      const body = {
+        datasetRef: datasetUrl,
+        params: {
+          kernel,
+          C: Number(C),
+          gamma,
+          degree: Number(degree),
+          test_size: Number(testSize),
+          ngram_range: [Number(ngramMin), Number(ngramMax)],
+          max_features: Number(maxFeatures),
+        },
+      };
+      const res = await fetch(API.TRAIN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Train failed");
+      // Best-effort refresh of metrics & history
+      fetch(PATH.METRICS)
+      .then((r) => (r.ok ? (r.json() as Promise<Metrics>) : null))
+      .then((m) => {
+        if (m) setMetrics(m);
+      })
+  .catch(() => { /* ignore */ });
+
+fetchRuns();
+
+      fetchRuns();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsTraining(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard title="Accuracy" value={(metrics.accuracy * 100).toFixed(1) + "%"} />
-        <StatCard title="Precision" value={(metrics.precision * 100).toFixed(1) + "%"} />
-        <StatCard title="Recall" value={(metrics.recall * 100).toFixed(1) + "%"} />
-        <StatCard title="F1-score" value={(metrics.f1 * 100).toFixed(1) + "%"} />
-      </div>
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList className="grid grid-cols-3 w-full md:w-auto mb-6">
+          <TabsTrigger value="overview" className="rounded-xl">Overview</TabsTrigger>
+          <TabsTrigger value="upload" className="rounded-xl">Upload Dataset</TabsTrigger>
+          <TabsTrigger value="history" className="rounded-xl">Train History</TabsTrigger>
+        </TabsList>
 
-      <Card className="rounded-2xl">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Confusion Matrix (SVM)</CardTitle>
-          <div className="flex gap-2">
-            <Button variant="secondary" className="rounded-xl">
-              <UploadCloud className="h-4 w-4 mr-2" />
-              Upload New Model
-            </Button>
-            <Button className="rounded-xl">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Retrain
-            </Button>
+        {/* ---------------- OVERVIEW ---------------- */}
+        <TabsContent value="overview" className="space-y-6">
+          {/* Metric cards */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            {cards.map((c) => (
+              <Card key={c.k} className="rounded-2xl">
+                <CardHeader><CardTitle>{c.k}</CardTitle></CardHeader>
+                <CardContent className="text-2xl font-semibold">{c.v}</CardContent>
+              </Card>
+            ))}
           </div>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border rounded-xl">
-              <thead>
-                <tr>
-                  <th className="p-2"></th>
-                  <th className="p-2">Pred: Pos</th>
-                  <th className="p-2">Pred: Neu</th>
-                  <th className="p-2">Pred: Neg</th>
-                </tr>
-              </thead>
-              <tbody>
-                {["True Pos", "True Neu", "True Neg"].map((rowLabel, i) => (
-                  <tr key={rowLabel} className="text-center border-t">
-                    <td className="p-2 text-left font-medium">{rowLabel}</td>
-                    {confusion[i].map((v, j) => (
-                      <td key={j} className="p-2">
-                        <div className={`mx-auto w-16 h-8 rounded ${v > 380 ? "bg-green-200" : v > 60 ? "bg-yellow-200" : "bg-red-200"} flex items-center justify-center`}>{v}</div>
-                      </td>
+
+          {/* Train Controls */}
+          <Card className="rounded-2xl">
+            <CardHeader className="flex flex-col gap-1">
+              <CardTitle className="flex items-center gap-2">
+                <SlidersHorizontal className="h-5 w-5" /> Retrain Model
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Adjust parameters and launch a new training job.
+              </p>
+            </CardHeader>
+
+            <CardContent className="space-y-6">
+              {/* Hàng 1: Kernel - C - Test size */}
+              <div className="grid grid-cols-12 gap-6 items-start">
+                {/* Kernel */}
+                <div className="col-span-12 md:col-span-3">
+                  <Label className="text-sm mb-1 block">Kernel</Label>
+                  <Select
+                    value={kernel}
+                    onValueChange={setKernel}
+                    /* QUAN TRỌNG: width đặt ở Select, không phải SelectTrigger */
+                    className="w-full h-10 px-3 rounded-md border border-slate-300 bg-white"
+                  >
+                    <SelectTrigger className="hidden" />
+                    <SelectContent>
+                      <SelectItem value="linear">linear</SelectItem>
+                      <SelectItem value="rbf">rbf</SelectItem>
+                      <SelectItem value="poly">poly</SelectItem>
+                      <SelectItem value="sigmoid">sigmoid</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* C */}
+                <div className="col-span-12 md:col-span-4">
+                  <Label className="text-sm mb-1 block">C</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    value={C}
+                    onChange={(e) => setC(Number(e.target.value))}
+                    className="w-full h-10"
+                  />
+                </div>
+
+                {/* Test size */}
+                <div className="col-span-12 md:col-span-5">
+                  <Label className="text-sm mb-1 block">Test size</Label>
+                  <Input
+                    type="number"
+                    step="0.05"
+                    min="0.05"
+                    max="0.95"
+                    value={testSize}
+                    onChange={(e) => setTestSize(Number(e.target.value))}
+                    className="w-full h-10"
+                  />
+                </div>
+              </div>
+
+              {/* Hàng 2: N-gram range + Max features */}
+              <div className="grid grid-cols-12 gap-6 items-start">
+                {/* ngram min */}
+                <div className="col-span-6 md:col-span-3">
+                  <Label className="text-sm mb-1 block">N-gram min</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={ngramMin}
+                    onChange={(e) => setNgramMin(Number(e.target.value))}
+                    className="w-full h-10"
+                  />
+                </div>
+
+                {/* ngram max */}
+                <div className="col-span-6 md:col-span-3">
+                  <Label className="text-sm mb-1 block">N-gram max</Label>
+                  <Input
+                    type="number"
+                    min={ngramMin}
+                    max={5}
+                    value={ngramMax}
+                    onChange={(e) => setNgramMax(Number(e.target.value))}
+                    className="w-full h-10"
+                  />
+                </div>
+
+                {/* max features */}
+                <div className="col-span-12 md:col-span-6">
+                  <Label className="text-sm mb-1 block">Max features (TF-IDF)</Label>
+                  <Input
+                    type="number"
+                    step={1000}
+                    value={maxFeatures}
+                    onChange={(e) => setMaxFeatures(Number(e.target.value))}
+                    className="w-full h-10"
+                  />
+                </div>
+              </div>
+
+              {/* Nút */}
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <Button onClick={triggerTrain} disabled={isTraining} className="rounded-xl">
+                  {isTraining ? (
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4 mr-2" />
+                  )}
+                  {isTraining ? "Training..." : "Start Training"}
+                </Button>
+
+                <Button variant="secondary" className="rounded-xl" onClick={() => window.location.reload()}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Reload Artifacts
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Confusion Matrix & ROC */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <ConfusionMatrixCard
+              title="Confusion Matrix"
+              imageUrl={PATH.CM_PNG}
+              csvUrl={PATH.CM_CSV}
+              labels={["Negative", "Positive"]}
+            />
+            <Card className="rounded-2xl">
+              <CardHeader><CardTitle>ROC Curve</CardTitle></CardHeader>
+              <CardContent>
+                {rocPngOk ? (
+                  <img src={PATH.ROC_PNG} alt="ROC Curve" className="w-full rounded-xl border" />
+                ) : (
+                  <div className="text-sm text-muted-foreground">No ROC curve image found.</div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Top Features */}
+          <Card className="rounded-2xl">
+            <TopFeatures source={PATH.TOP_TXT} />
+          </Card>
+
+          {/* Dataset quick head inside overview */}
+          <Card className="rounded-2xl">
+            <CardHeader className="flex flex-col gap-2">
+              <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5"/> Dataset Preview</CardTitle>
+              <div className="flex flex-col md:flex-row gap-3">
+                <div className="flex items-center gap-2 w-full md:w-2/3">
+                  <Label className="min-w-20">CSV URL</Label>
+                  <Input value={datasetUrl} onChange={(e) => setDatasetUrl(e.target.value)} placeholder="/path/to/your.csv" />
+                  <Button variant="secondary" className="rounded-xl" onClick={() => loadDataset(datasetUrl)}>
+                    <RefreshCw className="h-4 w-4 mr-2"/>Load
+                  </Button>
+                </div>
+                {serverDatasets.length > 0 && (
+                  <div className="flex items-center gap-2 w-full md:w-1/3">
+                    <Label className="min-w-24">Server set</Label>
+                    <Select onValueChange={(v) => setDatasetUrl(v)}>
+                      <SelectTrigger><SelectValue placeholder="Pick dataset" /></SelectTrigger>
+                      <SelectContent>
+                        {serverDatasets.map((p) => (
+                          <SelectItem key={p} value={p}>{p}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <Label>Head</Label>
+                  <Select value={String(headN)} onValueChange={(v) => setHeadN(Number(v))}>
+                    <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {[10,20,50,100].map((n) => (
+                        <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="w-full overflow-auto rounded-xl border">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-muted/50 sticky top-0">
+                    <tr>
+                      {tableCols.map((c) => (
+                        <th key={c} className="px-3 py-2 text-left font-medium whitespace-nowrap">{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleRows.map((row, i) => (
+                      <tr key={i} className="odd:bg-muted/30">
+                        {tableCols.map((c) => (
+                          <td key={c} className="px-3 py-2 whitespace-nowrap max-w-[360px] overflow-hidden text-ellipsis">{String(row[c])}</td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+                  </tbody>
+                </table>
+              </div>
 
-      <Card className="rounded-2xl">
-        <CardHeader>
-          <CardTitle>Feature Importance (example)</CardTitle>
-        </CardHeader>
-        <CardContent style={{ height: 300 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={[{ feat: "good", val: 0.8 }, { feat: "bad", val: 0.72 }, { feat: "love", val: 0.67 }, { feat: "bug", val: 0.53 }]}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="feat" />
-              <YAxis />
-              <RTooltip />
-              <Legend />
-              <Bar dataKey="val" name="Weight" fill="#60a5fa" />
-            </BarChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
+              {/* ---- Heatmap in Retrain section ---- */}
+              <div className="mt-6 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    <span className="font-medium">Feature correlation</span> (numeric columns, up to 20)
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={showHeatmapTrain}
+                        onChange={(e) => setShowHeatmapTrain(e.target.checked)}
+                      />
+                      Show heatmap
+                    </label>
+                    <Button variant="secondary" className="rounded-xl" onClick={recomputeHeatmapFromCurrent}>
+                      Recompute
+                    </Button>
+                  </div>
+                </div>
+
+                {showHeatmapTrain ? (
+                  heatCols.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">
+                      No numeric columns detected for correlation.
+                    </div>
+                  ) : (
+                    <TooltipProvider delayDuration={50}>
+                      <div className="overflow-auto rounded-xl border">
+                        <div className="inline-block">
+                          <div
+                            className="grid p-2"
+                            style={{ gridTemplateColumns: `140px repeat(${heatCols.length}, 28px)` }}
+                          >
+                            {/* header */}
+                            <div />
+                            {heatCols.map((c) => (
+                              <div
+                                key={c}
+                                className="text-[10px] text-muted-foreground rotate-[-60deg] origin-left translate-y-4 whitespace-nowrap h-10"
+                              >
+                                {c}
+                              </div>
+                            ))}
+
+                            {/* rows */}
+                            {heatCols.map((rName, rIdx) => (
+                              <React.Fragment key={`row-${rName}`}>
+                                <div className="text-[11px] pr-2 py-1 whitespace-nowrap sticky left-0 bg-background/80">
+                                  {rName}
+                                </div>
+                                {heatCols.map((cName, cIdx) => {
+                                  const v = heatCorr?.[rIdx]?.[cIdx] ?? 0;
+                                  // map [-1,1] -> blue-white-red
+                                  const x = Math.max(-1, Math.min(1, v));
+                                  const hue = ((x + 1) / 2) * 240; // 0..240
+                                  const bg = `hsl(${240 - hue} 85% ${50 - Math.abs(x) * 25}% / 0.95)`;
+                                  return (
+                                    <Tooltip key={`${rIdx}-${cIdx}`}>
+                                      <TooltipTrigger asChild>
+                                        <div className="w-7 h-7 border" style={{ background: bg }} />
+                                      </TooltipTrigger>
+                                      <TooltipContent side="top" className="text-xs">
+                                        <div className="font-mono">
+                                          {rName} × {cName}: {v.toFixed(3)}
+                                        </div>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  );
+                                })}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </TooltipProvider>
+                  )
+                ) : null}
+              </div>
+
+            </CardContent>
+          </Card>
+
+          {/* Misclassified samples */}
+          {misclassified.length > 0 && (
+            <Card className="rounded-2xl">
+              <CardHeader><CardTitle>Misclassified Samples</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <MisclassifiedList data={misclassified} />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Quick summary from predictions_new.csv */}
+          <BatchPredictSummary csvUrl={PATH.PRED_NEW_CSV} />
+        </TabsContent>
+
+        {/* ---------------- UPLOAD ---------------- */}
+        <TabsContent value="upload" className="space-y-6">
+          <Card className="rounded-2xl">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><UploadCloud className="h-5 w-5"/> Upload CSV</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-3">
+                <input
+                  id="file"
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleUpload(f);
+                  }}
+                  className="border rounded-xl p-2"
+                />
+              </div>
+              <div className="text-sm text-muted-foreground">After upload, the dataset will be previewed and set as the current training source.</div>
+            </CardContent>
+          </Card>
+
+          {/* live preview re-used from Overview */}
+          <Card className="rounded-2xl">
+            <CardHeader>
+              <CardTitle>Current Dataset (head)</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Label className="min-w-20">Head</Label>
+                <Select value={String(headN)} onValueChange={(v) => setHeadN(Number(v))}>
+                  <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[10,20,50,100].map((n) => (
+                      <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button variant="secondary" onClick={() => loadDataset(datasetUrl)} className="rounded-xl">
+                  <RefreshCw className="h-4 w-4 mr-2"/>Refresh
+                </Button>
+              </div>
+              <div className="w-full overflow-auto rounded-xl border">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-muted/50 sticky top-0">
+                    <tr>
+                      {tableCols.map((c) => (
+                        <th key={c} className="px-3 py-2 text-left font-medium whitespace-nowrap">{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleRows.map((row, i) => (
+                      <tr key={i} className="odd:bg-muted/30">
+                        {tableCols.map((c) => (
+                          <td key={c} className="px-3 py-2 whitespace-nowrap max-w-[360px] overflow-hidden text-ellipsis">{String(row[c])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ---------------- HISTORY ---------------- */}
+        <TabsContent value="history" className="space-y-6">
+          <Card className="rounded-2xl">
+            <CardHeader className="flex items-center justify-between">
+              <CardTitle>Training Runs</CardTitle>
+              <Button variant="secondary" className="rounded-xl" onClick={fetchRuns}><RefreshCw className="h-4 w-4 mr-2"/>Refresh</Button>
+            </CardHeader>
+            <CardContent>
+              {runs.length === 0 ? (
+                <div className="text-sm text-muted-foreground">No runs found.</div>
+              ) : (
+                <div className="w-full overflow-auto rounded-xl border">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-muted/50">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Time</th>
+                        <th className="px-3 py-2 text-left">Run ID</th>
+                        <th className="px-3 py-2 text-left">Accuracy</th>
+                        <th className="px-3 py-2 text-left">F1</th>
+                        <th className="px-3 py-2 text-left">Params</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.map((r) => (
+                        <tr key={r.id} className="odd:bg-muted/30">
+                          <td className="px-3 py-2 whitespace-nowrap">{new Date(r.created_at).toLocaleString()}</td>
+                          <td className="px-3 py-2 whitespace-nowrap font-mono">{r.id}</td>
+                          <td className="px-3 py-2">{typeof r.accuracy === "number" ? (r.accuracy * 100).toFixed(1) + "%" : "—"}</td>
+                          <td className="px-3 py-2">{typeof r.f1 === "number" ? (r.f1 * 100).toFixed(1) + "%" : "—"}</td>
+                          <td className="px-3 py-2 max-w-[520px] overflow-hidden text-ellipsis">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <code className="text-xs">{JSON.stringify(r.params)}</code>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="max-w-[480px] text-xs">
+                                  <pre className="whitespace-pre-wrap">{JSON.stringify(r.params, null, 2)}</pre>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

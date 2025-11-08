@@ -12,4 +12,12 @@ export default defineConfig({
       "data": fileURLToPath(new URL("./data", import.meta.url)),
     },
   },
+  server: {
+    proxy: {
+      "/svm": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+    },
+  },
 });
