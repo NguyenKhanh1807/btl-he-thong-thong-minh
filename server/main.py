@@ -3,6 +3,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 import json, time
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 ART_DIR = Path("svm/outputs")
 INP_DIR = Path("svm/inputs")
@@ -11,6 +14,12 @@ RUNS_FILE = ART_DIR / "runs.json"
 app = FastAPI()
 app.mount("/svm/inputs",  StaticFiles(directory=str(INP_DIR)),  name="svm_inputs")
 app.mount("/svm/outputs", StaticFiles(directory=str(ART_DIR)), name="svm_outputs")
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+SAMPLES_DIR = BASE_DIR / "public" / "samples"
+
+SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/samples", StaticFiles(directory=SAMPLES_DIR), name="samples")
 
 class TrainBody(BaseModel):
     datasetRef: str

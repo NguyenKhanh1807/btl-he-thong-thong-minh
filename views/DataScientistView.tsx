@@ -20,12 +20,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import { ReloadIcon } from "../components/ui/reload-icon";
 import { RefreshCw, UploadCloud, Play, Database, SlidersHorizontal } from "lucide-react";
+import { Download } from "lucide-react";
 
 // Existing DS components in your project
 import MisclassifiedList from "../components/DataScientistView/MisclassifiedList";
 import TopFeatures from "../components/DataScientistView/TopFeatures";
 import ConfusionMatrixCard from "../components/DataScientistView/ConfusionMatrixCard";
 import BatchPredictSummary from "../components/DataScientistView/BatchPredictSummary";
+import { RunParams } from "../components/DataScientistView/RunParams"
 
 /* ---------------- Types ---------------- */
 
@@ -68,6 +70,71 @@ const API = {
 };
 
 /* ---------------- Helper: numeric correlation ---------------- */
+
+type SVMParams = {
+  kernel: "linear" | "rbf" | "poly" | "sigmoid" | string;
+  C: number;
+  gamma: "scale" | "auto" | number | string;
+  degree?: number;
+  test_size: number;
+  ngram_range?: [number, number] | number[];
+  max_features?: number;
+  [k: string]: any;
+};
+
+function parseMaybeJSON<T = any>(x: any): T | null {
+  if (x == null) return null;
+  if (typeof x === "object") return x as T;
+  if (typeof x === "string") {
+    try {
+      return JSON.parse(x) as T;
+    } catch {
+      // đôi khi backend ghi JSON -> string rồi lại JSON.stringify lần nữa
+      // thử thêm một lần bóc
+      try {
+        const once = JSON.parse(x);
+        return typeof once === "string" ? (JSON.parse(once) as T) : (once as T);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeParams(raw: any): SVMParams | null {
+  // một số backend hay bọc { params: {...} } hoặc lưu mảng [meta, params]
+  let p: any = raw;
+  if (Array.isArray(p)) {
+    // nếu là mảng, lấy phần có nhiều key nhất
+    p = p.reduce((best, cur) =>
+      cur && typeof cur === "object" &&
+      Object.keys(cur).length > Object.keys(best || {}).length
+        ? cur
+        : best,
+    null as any);
+  }
+  if (p && typeof p === "object" && p.params) p = p.params;
+
+  const parsed = parseMaybeJSON<SVMParams>(p) ?? p;
+  if (!parsed || typeof parsed !== "object") return null;
+
+  // ép kiểu số cho chắc
+  const num = (v: any) =>
+    typeof v === "number" ? v : (Number(v) as number);
+
+  return {
+    kernel: (parsed as any).kernel,
+    C: num((parsed as any).C),
+    gamma: (parsed as any).gamma,
+    degree: (parsed as any).degree != null ? num((parsed as any).degree) : undefined,
+    test_size: num((parsed as any).test_size),
+    ngram_range: (parsed as any).ngram_range,
+    max_features: (parsed as any).max_features != null ? num((parsed as any).max_features) : undefined,
+    ...parsed,
+  };
+}
+
 
 function computeCorrelationMatrix(rows: AnyRow[], maxCols = 20) {
   if (!rows || rows.length === 0) return { cols: [] as string[], corr: [] as number[][] };
@@ -327,6 +394,34 @@ export default function DataScientistView() {
     }
   };
 
+  const startTraining = async () => {
+    // tái dùng pipeline train có sẵn
+    await triggerTrain();
+  };
+
+  const reloadArtifacts = async () => {
+    // 1) Reload metrics & ROC
+    try {
+      const [m, rocOk] = await Promise.all([
+        fetch(PATH.METRICS).then(r => (r.ok ? r.json() : null)),
+        fetch(PATH.ROC_PNG, { method: "HEAD" }).then(r => r.ok).catch(() => false),
+      ]);
+      setMetrics(m ?? null);
+      setRocPngOk(rocOk);
+    } catch { /* ignore */ }
+
+    // 2) Reload predictions cho MisclassifiedList
+    Papa.parse(PATH.PRED_CSV, {
+      download: true,
+      header: true,
+      dynamicTyping: true,
+      complete: (res) => {
+        const rows = (res.data as any[]).filter((r) => r?.text !== undefined);
+        setPredRows(rows as PredRow[]);
+      },
+    });
+  };
+
   const visibleRows = useMemo(() => datasetRows.slice(0, headN), [datasetRows, headN]);
   const tableCols = useMemo(() => (visibleRows[0] ? Object.keys(visibleRows[0]) : []), [visibleRows]);
 
@@ -493,18 +588,27 @@ fetchRuns();
               </div>
 
               {/* Nút */}
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                <Button onClick={triggerTrain} disabled={isTraining} className="rounded-xl">
-                  {isTraining ? (
-                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Play className="h-4 w-4 mr-2" />
-                  )}
+              <div className="flex items-center gap-4 pt-4">
+                {/* Start Training */}
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="flex items-center gap-2"
+                  onClick={startTraining}
+                  disabled={isTraining}
+                >
+                  <Play className="w-4 h-4" />
                   {isTraining ? "Training..." : "Start Training"}
                 </Button>
 
-                <Button variant="secondary" className="rounded-xl" onClick={() => window.location.reload()}>
-                  <RefreshCw className="h-4 w-4 mr-2" />
+                {/* Reload Artifacts */}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="flex items-center gap-2"
+                  onClick={reloadArtifacts}
+                >
+                  <RefreshCw className="w-4 h-4" />
                   Reload Artifacts
                 </Button>
               </div>
@@ -697,22 +801,92 @@ fetchRuns();
         <TabsContent value="upload" className="space-y-6">
           <Card className="rounded-2xl">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><UploadCloud className="h-5 w-5"/> Upload CSV</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <UploadCloud className="h-5 w-5" /> Upload CSV
+              </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-3">
-                <input
-                  id="file"
-                  type="file"
-                  accept=".csv,text/csv"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) handleUpload(f);
-                  }}
-                  className="border rounded-xl p-2"
-                />
+
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+
+                {/* ----------- Cột 1: Upload CSV ----------- */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Choose CSV file</label>
+
+                  <input
+                    id="file"
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleUpload(f);
+                    }}
+                    className="block w-full rounded-xl border p-3"
+                  />
+
+                  <p className="text-xs text-muted-foreground">
+                    After upload, the dataset will be previewed and used as the current training source.
+                  </p>
+                </div>
+
+                {/* ----------- Cột 2: Sample CSV box ----------- */}
+                <div className="rounded-xl border p-4">
+                  <h4 className="font-medium mb-1">Need a sample CSV?</h4>
+
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Download a small sample formatted for this model (columns: <code>text</code>, <code>label</code>).
+                    <br />
+                    It’s derived from the Kaggle “Steam Reviews” dataset.
+                    <br />
+                  </p>
+
+                  <div className="flex flex-wrap gap-3">
+
+                    {/* Nút Download sample.csv */}
+                    <a
+                      href="/samples/steam_reviews_sample.csv"
+                      download
+                      className="
+                        group relative inline-flex items-center gap-2
+                        rounded-lg bg-primary text-primary-foreground
+                        px-4 py-2 text-sm font-medium
+                        shadow-sm ring-1 ring-primary/40
+                        transition
+                        hover:bg-primary/90 hover:shadow
+                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring
+                        overflow-hidden
+                      "
+                    >
+                      <span
+                        className="
+                          pointer-events-none absolute inset-0 rounded-lg
+                          bg-gradient-to-r from-transparent via-white/30 to-transparent
+                          -translate-x-full
+                          transition-transform duration-700 ease-out
+                          group-hover:translate-x-full
+                        "
+                      />
+
+                      <Download className="h-4 w-4 transition-transform group-hover:scale-110" />
+                      Download sample.csv
+                    </a>
+
+                    {/* Link Kaggle */}
+                    <a
+                      href="https://www.kaggle.com/datasets/andrewmvd/steam-reviews"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="
+                        inline-flex items-center rounded-lg border
+                        px-4 py-2 text-sm
+                        hover:bg-accent hover:text-accent-foreground transition
+                      "
+                    >
+                      View dataset on Kaggle
+                    </a>
+                  </div>
+                </div>
               </div>
-              <div className="text-sm text-muted-foreground">After upload, the dataset will be previewed and set as the current training source.</div>
             </CardContent>
           </Card>
 
@@ -789,17 +963,8 @@ fetchRuns();
                           <td className="px-3 py-2 whitespace-nowrap font-mono">{r.id}</td>
                           <td className="px-3 py-2">{typeof r.accuracy === "number" ? (r.accuracy * 100).toFixed(1) + "%" : "—"}</td>
                           <td className="px-3 py-2">{typeof r.f1 === "number" ? (r.f1 * 100).toFixed(1) + "%" : "—"}</td>
-                          <td className="px-3 py-2 max-w-[520px] overflow-hidden text-ellipsis">
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <code className="text-xs">{JSON.stringify(r.params)}</code>
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-[480px] text-xs">
-                                  <pre className="whitespace-pre-wrap">{JSON.stringify(r.params, null, 2)}</pre>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
+                          <td className="px-3 py-2 align-top">
+                            <RunParams raw={r.params} />
                           </td>
                         </tr>
                       ))}

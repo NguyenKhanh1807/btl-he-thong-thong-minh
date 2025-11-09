@@ -24,7 +24,7 @@ from datetime import datetime
 
 # ==== CẤU HÌNH INPUT ====
 # Cho phép truyền path qua argv, nếu không sẽ dùng đường dẫn mặc định
-RAW = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(r"D:\Study\Master\HK1_2025\Hệ thống thông minh\BTL\data\raw\dataset.csv")
+RAW = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(r"D:/Study/Master/HK1_2025/Hệ thống thông minh/BTL/data/raw/dataset.csv")
 
 # ==== CẤU HÌNH OUTPUT ====
 OUT_PUBLIC = Path("public")
