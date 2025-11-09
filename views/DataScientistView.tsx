@@ -182,7 +182,7 @@ export default function DataScientistView() {
   const [predRows, setPredRows] = useState<PredRow[]>([]);
 
   /* ---- Dataset preview ---- */
-  const [datasetUrl, setDatasetUrl] = useState<string>("D:\Study\Master\HK1_2025\Hệ thống thông minh\BTL\data\raw\dataset.csv");
+  const [datasetUrl, setDatasetUrl] = useState<string>("D:\\Study\\Master\\HK1_2025\\Hệ thống thông minh\\BTL\\data\\raw\\dataset.csv");
   const [datasetRows, setDatasetRows] = useState<AnyRow[]>([]);
   const [headN, setHeadN] = useState<number>(10);
 
@@ -222,8 +222,8 @@ export default function DataScientistView() {
 
   // Load metrics
   useEffect(() => {
-    fetch(PATH.METRICS)
-      .then((r) => (r.ok ? r.json() : Promise.reject("metrics not found")))
+    fetch(`${PATH.METRICS}?t=${Date.now()}`, { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : Promise.reject("metrics not found")))
       .then((j: Metrics) => setMetrics(j))
       .catch(() => setMetrics(null));
   }, []);
@@ -403,8 +403,8 @@ export default function DataScientistView() {
     // 1) Reload metrics & ROC
     try {
       const [m, rocOk] = await Promise.all([
-        fetch(PATH.METRICS).then(r => (r.ok ? r.json() : null)),
-        fetch(PATH.ROC_PNG, { method: "HEAD" }).then(r => r.ok).catch(() => false),
+        fetch(`${PATH.METRICS}?t=${Date.now()}`, { cache: "no-store" }).then(r => (r.ok ? r.json() : null)),
+        fetch(PATH.ROC_PNG, { method: "HEAD", cache: "no-store" }).then(r => r.ok).catch(() => false),
       ]);
       setMetrics(m ?? null);
       setRocPngOk(rocOk);

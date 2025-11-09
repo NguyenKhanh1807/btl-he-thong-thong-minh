@@ -88,31 +88,10 @@ export function RunParams({ raw, showJson = false }: { raw: any; showJson?: bool
         dark:border-slate-800/70 dark:bg-slate-900/50
       "
     >
-      {/* hàng pills nổi bật */}
+      {/* hàng pills nổi bật chú thích parameters cho từng lượt chạy*/}
       <div className="flex flex-wrap gap-2">
         {items.slice(0, 6).map(([k, v]) => (
           <Pill key={k} label={k} value={<PrettyValue v={v} />} />
-        ))}
-      </div>
-
-      {/* lưới chi tiết */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map(([k, v]) => (
-          <div
-            key={k}
-            className="
-              group flex items-center justify-between gap-4 rounded-lg
-              bg-slate-50/40 px-3 py-2 ring-1 ring-slate-200/70
-              hover:bg-slate-100/60 hover:ring-slate-300
-              dark:bg-slate-800/40 dark:ring-slate-700/70 dark:hover:bg-slate-800/60
-              transition
-            "
-          >
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{k}</span>
-            <span className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
-              <PrettyValue v={v} />
-            </span>
-          </div>
         ))}
       </div>
 
