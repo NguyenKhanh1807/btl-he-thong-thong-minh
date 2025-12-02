@@ -109,10 +109,10 @@ function normalizeParams(raw: any): SVMParams | null {
     // nếu là mảng, lấy phần có nhiều key nhất
     p = p.reduce((best, cur) =>
       cur && typeof cur === "object" &&
-      Object.keys(cur).length > Object.keys(best || {}).length
+        Object.keys(cur).length > Object.keys(best || {}).length
         ? cur
         : best,
-    null as any);
+      null as any);
   }
   if (p && typeof p === "object" && p.params) p = p.params;
 
@@ -449,13 +449,13 @@ export default function DataScientistView() {
       if (!res.ok) throw new Error("Train failed");
       // Best-effort refresh of metrics & history
       fetch(PATH.METRICS)
-      .then((r) => (r.ok ? (r.json() as Promise<Metrics>) : null))
-      .then((m) => {
-        if (m) setMetrics(m);
-      })
-  .catch(() => { /* ignore */ });
+        .then((r) => (r.ok ? (r.json() as Promise<Metrics>) : null))
+        .then((m) => {
+          if (m) setMetrics(m);
+        })
+        .catch(() => { /* ignore */ });
 
-fetchRuns();
+      fetchRuns();
 
       fetchRuns();
     } catch (e) {
@@ -643,13 +643,13 @@ fetchRuns();
           {/* Dataset quick head inside overview */}
           <Card className="rounded-2xl">
             <CardHeader className="flex flex-col gap-2">
-              <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5"/> Dataset Preview</CardTitle>
+              <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5" /> Dataset Preview</CardTitle>
               <div className="flex flex-col md:flex-row gap-3">
                 <div className="flex items-center gap-2 w-full md:w-2/3">
                   <Label className="min-w-20">CSV URL</Label>
                   <Input value={datasetUrl} onChange={(e) => setDatasetUrl(e.target.value)} placeholder="/path/to/your.csv" />
                   <Button variant="secondary" className="rounded-xl" onClick={() => loadDataset(datasetUrl)}>
-                    <RefreshCw className="h-4 w-4 mr-2"/>Load
+                    <RefreshCw className="h-4 w-4 mr-2" />Load
                   </Button>
                 </div>
                 {serverDatasets.length > 0 && (
@@ -670,7 +670,7 @@ fetchRuns();
                   <Select value={String(headN)} onValueChange={(v) => setHeadN(Number(v))}>
                     <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {[10,20,50,100].map((n) => (
+                      {[10, 20, 50, 100].map((n) => (
                         <SelectItem key={n} value={String(n)}>{n}</SelectItem>
                       ))}
                     </SelectContent>
@@ -901,13 +901,13 @@ fetchRuns();
                 <Select value={String(headN)} onValueChange={(v) => setHeadN(Number(v))}>
                   <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {[10,20,50,100].map((n) => (
+                    {[10, 20, 50, 100].map((n) => (
                       <SelectItem key={n} value={String(n)}>{n}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <Button variant="secondary" onClick={() => loadDataset(datasetUrl)} className="rounded-xl">
-                  <RefreshCw className="h-4 w-4 mr-2"/>Refresh
+                  <RefreshCw className="h-4 w-4 mr-2" />Refresh
                 </Button>
               </div>
               <div className="w-full overflow-auto rounded-xl border">
@@ -939,7 +939,7 @@ fetchRuns();
           <Card className="rounded-2xl">
             <CardHeader className="flex items-center justify-between">
               <CardTitle>Training Runs</CardTitle>
-              <Button variant="secondary" className="rounded-xl" onClick={fetchRuns}><RefreshCw className="h-4 w-4 mr-2"/>Refresh</Button>
+              <Button variant="secondary" className="rounded-xl" onClick={fetchRuns}><RefreshCw className="h-4 w-4 mr-2" />Refresh</Button>
             </CardHeader>
             <CardContent>
               {runs.length === 0 ? (
