@@ -644,39 +644,39 @@ export default function DataScientistView() {
           <Card className="rounded-2xl">
             <CardHeader className="flex flex-col gap-2">
               <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5" /> Dataset Preview</CardTitle>
-              <div className="flex flex-col md:flex-row gap-3">
-                <div className="flex items-center gap-2 w-full md:w-2/3">
-                  <Label className="min-w-20">CSV URL</Label>
-                  <Input value={datasetUrl} onChange={(e) => setDatasetUrl(e.target.value)} placeholder="/path/to/your.csv" />
-                  <Button variant="secondary" className="rounded-xl" onClick={() => loadDataset(datasetUrl)}>
-                    <RefreshCw className="h-4 w-4 mr-2" />Load
-                  </Button>
-                </div>
-                {serverDatasets.length > 0 && (
-                  <div className="flex items-center gap-2 w-full md:w-1/3">
-                    <Label className="min-w-24">Server set</Label>
-                    <Select onValueChange={(v) => setDatasetUrl(v)}>
-                      <SelectTrigger><SelectValue placeholder="Pick dataset" /></SelectTrigger>
+                <div className="flex flex-col md:flex-row gap-3">
+                  <div className="flex items-center gap-2 w-full md:w-2/3">
+                    <Label className="min-w-20">CSV URL</Label>
+                    <Input value={datasetUrl} onChange={(e) => setDatasetUrl(e.target.value)} placeholder="/path/to/your.csv" />
+                    <Button variant="secondary" className="rounded-xl" onClick={() => loadDataset(datasetUrl)}>
+                      <RefreshCw className="h-4 w-4 mr-2" />Load
+                    </Button>
+                  </div>
+                  {serverDatasets.length > 0 && (
+                    <div className="flex items-center gap-2 w-full md:w-1/3">
+                      <Label className="min-w-24">Server set</Label>
+                      <Select onValueChange={(v) => setDatasetUrl(v)}>
+                        <SelectTrigger><SelectValue placeholder="Pick dataset" /></SelectTrigger>
+                        <SelectContent>
+                          {serverDatasets.map((p) => (
+                            <SelectItem key={p} value={p}>{p}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Label>Head</Label>
+                    <Select value={String(headN)} onValueChange={(v) => setHeadN(Number(v))}>
+                      <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {serverDatasets.map((p) => (
-                          <SelectItem key={p} value={p}>{p}</SelectItem>
+                        {[10, 20, 50, 100].map((n) => (
+                          <SelectItem key={n} value={String(n)}>{n}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                )}
-                <div className="flex items-center gap-2">
-                  <Label>Head</Label>
-                  <Select value={String(headN)} onValueChange={(v) => setHeadN(Number(v))}>
-                    <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {[10, 20, 50, 100].map((n) => (
-                        <SelectItem key={n} value={String(n)}>{n}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
-              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="w-full overflow-auto rounded-xl border">
@@ -699,89 +699,89 @@ export default function DataScientistView() {
                   </tbody>
                 </table>
               </div>
-
-              {/* ---- Heatmap in Retrain section ---- */}
-              <div className="mt-6 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">
-                    <span className="font-medium">Feature correlation</span> (numeric columns, up to 20)
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={showHeatmapTrain}
-                        onChange={(e) => setShowHeatmapTrain(e.target.checked)}
-                      />
-                      Show heatmap
-                    </label>
-                    <Button variant="secondary" className="rounded-xl" onClick={recomputeHeatmapFromCurrent}>
-                      Recompute
-                    </Button>
-                  </div>
-                </div>
-
-                {showHeatmapTrain ? (
-                  heatCols.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">
-                      No numeric columns detected for correlation.
-                    </div>
-                  ) : (
-                    <TooltipProvider delayDuration={50}>
-                      <div className="overflow-auto rounded-xl border">
-                        <div className="inline-block">
-                          <div
-                            className="grid p-2"
-                            style={{ gridTemplateColumns: `140px repeat(${heatCols.length}, 28px)` }}
-                          >
-                            {/* header */}
-                            <div />
-                            {heatCols.map((c) => (
-                              <div
-                                key={c}
-                                className="text-[10px] text-muted-foreground rotate-[-60deg] origin-left translate-y-4 whitespace-nowrap h-10"
-                              >
-                                {c}
-                              </div>
-                            ))}
-
-                            {/* rows */}
-                            {heatCols.map((rName, rIdx) => (
-                              <React.Fragment key={`row-${rName}`}>
-                                <div className="text-[11px] pr-2 py-1 whitespace-nowrap sticky left-0 bg-background/80">
-                                  {rName}
-                                </div>
-                                {heatCols.map((cName, cIdx) => {
-                                  const v = heatCorr?.[rIdx]?.[cIdx] ?? 0;
-                                  // map [-1,1] -> blue-white-red
-                                  const x = Math.max(-1, Math.min(1, v));
-                                  const hue = ((x + 1) / 2) * 240; // 0..240
-                                  const bg = `hsl(${240 - hue} 85% ${50 - Math.abs(x) * 25}% / 0.95)`;
-                                  return (
-                                    <Tooltip key={`${rIdx}-${cIdx}`}>
-                                      <TooltipTrigger asChild>
-                                        <div className="w-7 h-7 border" style={{ background: bg }} />
-                                      </TooltipTrigger>
-                                      <TooltipContent side="top" className="text-xs">
-                                        <div className="font-mono">
-                                          {rName} × {cName}: {v.toFixed(3)}
-                                        </div>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  );
-                                })}
-                              </React.Fragment>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </TooltipProvider>
-                  )
-                ) : null}
-              </div>
-
-            </CardContent>
+            </CardContent>  
           </Card>
+
+          {/* Heatmap section */}
+          <section className="mt-6">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-sm">
+                Feature correlation (numeric columns, up to 20)
+              </h3>
+              <div className="flex items-center gap-3 text-sm">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={showHeatmapTrain}
+                    onChange={(e) => setShowHeatmapTrain(e.target.checked)}
+                  />
+                  <span>Show heatmap</span>
+                </label>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={recomputeHeatmapFromCurrent}
+                  disabled={!datasetRows.length}
+                >
+                  Recompute
+                </Button>
+              </div>
+            </div>
+
+            {!showHeatmapTrain ? null : !datasetRows.length ? (
+              <p className="text-sm text-muted-foreground">
+                No dataset loaded yet. Upload or load a CSV above.
+              </p>
+            ) : heatCols.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No numeric columns detected for correlation.
+              </p>
+            ) : (
+              <div className="overflow-auto max-h-[420px] border rounded-xl">
+                <table className="min-w-max border-collapse text-xs">
+                  <thead>
+                    <tr>
+                      <th className="sticky left-0 z-10 bg-background border px-2 py-1" />
+                      {heatCols.map((c) => (
+                        <th key={c} className="border px-2 py-1 text-center">
+                          {c}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {heatCols.map((rName, rIdx) => (
+                      <tr key={rName}>
+                        <th className="sticky left-0 z-10 bg-background border px-2 py-1 text-right">
+                          {rName}
+                        </th>
+                        {heatCols.map((cName, cIdx) => {
+                          const v = heatCorr?.[rIdx]?.[cIdx] ?? 0;
+                          const x = Math.max(-1, Math.min(1, v));
+                          const hue = ((x + 1) / 2) * 240;
+                          const bg = `hsl(${240 - hue} 80% ${
+                            50 - Math.abs(x) * 25
+                          }% / 0.95)`;
+                          const fg = Math.abs(x) > 0.6 ? "#ffffff" : "#111111";
+
+                          return (
+                            <td
+                              key={cName}
+                              className="border px-1 py-1 text-center align-middle"
+                              style={{ backgroundColor: bg, color: fg }}
+                              title={`${rName} × ${cName}: ${v.toFixed(3)}`}
+                            >
+                              {v.toFixed(2)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
 
           {/* Misclassified samples */}
           {misclassified.length > 0 && (
